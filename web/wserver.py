@@ -1,8 +1,11 @@
-from logging import getLogger, FileHandler, StreamHandler, INFO, basicConfig
 from time import sleep
-from qbittorrentapi import NotFound404Error, Client as qbClient
-from aria2p import API as ariaAPI, Client as ariaClient
+from logging import INFO, FileHandler, StreamHandler, getLogger, basicConfig
+
 from flask import Flask, request
+from aria2p import API as ariaAPI
+from aria2p import Client as ariaClient
+from qbittorrentapi import Client as qbClient
+from qbittorrentapi import NotFound404Error
 
 from web.nodes import make_tree
 
@@ -10,9 +13,19 @@ app = Flask(__name__)
 
 aria2 = ariaAPI(ariaClient(host="http://localhost", port=6800, secret=""))
 
-basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-            handlers=[FileHandler('log.txt'), StreamHandler()],
-            level=INFO)
+xnox_client = qbClient(
+    host="localhost",
+    port=8090,
+    VERIFY_WEBUI_CERTIFICATE=False,
+    REQUESTS_ARGS={"timeout": (30, 60)},
+    HTTPADAPTER_ARGS={"pool_maxsize": 200, "pool_block": True},
+)
+
+basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    handlers=[FileHandler("log.txt"), StreamHandler()],
+    level=INFO,
+)
 
 LOGGER = getLogger(__name__)
 
@@ -649,8 +662,7 @@ section span{
 """
 
 
-def re_verfiy(paused, resumed, client, hash_id):
-
+def re_verfiy(paused, resumed, hash_id):
     paused = paused.strip()
     resumed = resumed.strip()
     if paused:
@@ -660,7 +672,7 @@ def re_verfiy(paused, resumed, client, hash_id):
 
     k = 0
     while True:
-        res = client.torrents_files(torrent_hash=hash_id)
+        res = xnox_client.torrents_files(torrent_hash=hash_id)
         verify = True
         for i in res:
             if str(i.id) in paused and i.priority != 0:
@@ -672,19 +684,19 @@ def re_verfiy(paused, resumed, client, hash_id):
         if verify:
             break
         LOGGER.info("Reverification Failed! Correcting stuff...")
-        client.auth_log_out()
         sleep(1)
-        client = qbClient(host="localhost", port="8090")
         try:
-            client.torrents_file_priority(
-                torrent_hash=hash_id, file_ids=paused, priority=0)
+            xnox_client.torrents_file_priority(
+                torrent_hash=hash_id, file_ids=paused, priority=0
+            )
         except NotFound404Error as e:
             raise NotFound404Error from e
         except Exception as e:
             LOGGER.error(f"{e} Errored in reverification paused!")
         try:
-            client.torrents_file_priority(
-                torrent_hash=hash_id, file_ids=resumed, priority=1)
+            xnox_client.torrents_file_priority(
+                torrent_hash=hash_id, file_ids=resumed, priority=1
+            )
         except NotFound404Error as e:
             raise NotFound404Error from e
         except Exception as e:
@@ -696,10 +708,9 @@ def re_verfiy(paused, resumed, client, hash_id):
     return True
 
 
-@app.route('/app/files/<string:id_>', methods=['GET'])
+@app.route("/app/files/<string:id_>", methods=["GET"])
 def list_torrent_contents(id_):
-
-    if "pin_code" not in request.args.keys():
+    if "pin_code" not in request.args:
         return code_page.replace("{form_url}", f"/app/files/{id_}")
 
     pincode = ""
@@ -712,19 +723,18 @@ def list_torrent_contents(id_):
         return "<h1>Incorrect pin code</h1>"
 
     if len(id_) > 20:
-        client = qbClient(host="localhost", port="8090")
-        res = client.torrents_files(torrent_hash=id_)
+        res = xnox_client.torrents_files(torrent_hash=id_)
         cont = make_tree(res)
-        client.auth_log_out()
     else:
         res = aria2.client.get_files(id_)
         cont = make_tree(res, True)
-    return page.replace("{My_content}", cont[0]).replace("{form_url}", f"/app/files/{id_}?pin_code={pincode}")
+    return page.replace("{My_content}", cont[0]).replace(
+        "{form_url}", f"/app/files/{id_}?pin_code={pincode}"
+    )
 
 
-@app.route('/app/files/<string:id_>', methods=['POST'])
+@app.route("/app/files/<string:id_>", methods=["POST"])
 def set_priority(id_):
-
     data = dict(request.form)
     resume = ""
     if len(id_) > 20:
@@ -742,35 +752,34 @@ def set_priority(id_):
         pause = pause.strip("|")
         resume = resume.strip("|")
 
-        client = qbClient(host="localhost", port="8090")
-
         try:
-            client.torrents_file_priority(
-                torrent_hash=id_, file_ids=pause, priority=0)
+            xnox_client.torrents_file_priority(
+                torrent_hash=id_, file_ids=pause, priority=0
+            )
         except NotFound404Error as e:
             raise NotFound404Error from e
         except Exception as e:
             LOGGER.error(f"{e} Errored in paused")
         try:
-            client.torrents_file_priority(
-                torrent_hash=id_, file_ids=resume, priority=1)
+            xnox_client.torrents_file_priority(
+                torrent_hash=id_, file_ids=resume, priority=1
+            )
         except NotFound404Error as e:
             raise NotFound404Error from e
         except Exception as e:
             LOGGER.error(f"{e} Errored in resumed")
         sleep(1)
-        if not re_verfiy(pause, resume, client, id_):
+        if not re_verfiy(pause, resume, id_):
             LOGGER.error(f"Verification Failed! Hash: {id_}")
-        client.auth_log_out()
     else:
         for i, value in data.items():
             if "filenode" in i and value == "on":
                 node_no = i.split("_")[-1]
-                resume += f'{node_no},'
+                resume += f"{node_no},"
 
         resume = resume.strip(",")
 
-        res = aria2.client.change_option(id_, {'select-file': resume})
+        res = aria2.client.change_option(id_, {"select-file": resume})
         if res == "OK":
             LOGGER.info(f"Verified! Gid: {id_}")
         else:
@@ -778,14 +787,17 @@ def set_priority(id_):
     return list_torrent_contents(id_)
 
 
-@app.route('/')
+@app.route("/")
 def homepage():
     return "<h1>See WZML-X <a href='https://www.github.com/weebzone/WZML'>@GitHub</a> By <a href='https://github.com/weebzone'>Code With Weeb</a></h1>"
 
 
 @app.errorhandler(Exception)
 def page_not_found(e):
-    return f"<h1>404: Torrent not found! Mostly wrong input. <br><br>Error: {e}</h2>", 404
+    return (
+        f"<h1>404: Torrent not found! Mostly wrong input. <br><br>Error: {e}</h2>",
+        404,
+    )
 
 
 if __name__ == "__main__":

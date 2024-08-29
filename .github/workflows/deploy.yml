@@ -27,9 +27,7 @@ on:
       TELEGRAM_HASH:
         description: "Telegram HASH from https://my.telegram.org/"
         required: true
-      TEAM_NAME:
-        description: 'Mention The Tem Name'
-        required: true
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
